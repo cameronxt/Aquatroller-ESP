@@ -1,18 +1,11 @@
-// 0.0.0 initial release - basic bluetooth, sd card and eeprom
-// 0.0.1 adds basic RTC functionality
-// 0.0.2 adds basic Temp sensor functionality
-// 0.0.3 adds more basic Bluetooth, EEPROM access, SD Card access and PH control
-// 0.0.4 adds basic LED control
-
-// TODO: SD Card 
+// TODO: SD Card: Store Settings & Save Logs
 
 // Optional Modules. comment to disable
-#define LIGHT_CONTROL
-#define TEMP_CONTROL
+// #define LIGHT_CONTROL
+// #define TEMP_CONTROL
 // #define PH_CONTROL
 // #define C02_CONTROL
 #define ATO_CONTROL
-
 
 #if CONFIG_FREERTOS_UNICORE
 #define ARDUINO_RUNNING_CORE 0
@@ -20,19 +13,31 @@
 #define ARDUINO_RUNNING_CORE 1
 #endif
 
-#include "Wire.h"
+// Standard includes
+#include <WiFi.h>
+#include <WiFiUdp.h> 
+#include <ESPmDNS.h>  // for OTA
+#include <ArduinoOTA.h>
+#include <Wire.h> // Talks to the ds18b20
+#include <esp_log.h>
+#include <Preferences.h>
+
+// Additionally downloaded libraries
+#include <NTPClient.h>  // to talk to NTP servers
+#include "DS3232RTC.h"                 // https://github.com/JChristensen/DS3232RTC
+#include <RTClib.h>
+
+// My Libraries
 //#include "eepromaccess.h"
 #include "bluetooth.h"
 #include "temp.h"
 #include "lights.h"
-#include "DS3232RTC.h"                 // https://github.com/JChristensen/DS3232RTC
-#include <RTClib.h>
 #include "ph.h"
 #include "ato.h"
-#include "esp_log.h"
+#include "secrets.h"
+#include "PrefAccess.h"
 
-void(* resetFunc) (void) = 0;     // Reset frunction
-
+// Pin Definitions
 #define PH_SENSOR_PIN 39
 #define C02_VALVE_PIN 2
 #define OPTICAL_SWITCH_PIN 36
@@ -40,26 +45,34 @@ void(* resetFunc) (void) = 0;     // Reset frunction
 #define WATER_VALVE_PIN 0
 #define ONE_WIRE_PIN 4
 
+// constants for number of seconds in standard units of time
+const unsigned long SecondsPerHour = 60UL * 60;
+const unsigned long SecondsPerMinute = 60UL;
+
+Preferences preferences;
+// PrefAccess prefs; // Object for retrieving and saving preferences
+DS3232RTC rtc; // create a RTC object
+
+WiFiUDP ntpUDP; // Create a UDP socket
+// Setup NTP client periodically update time frome NTP server
+NTPClient timeClient (ntpUDP, "north-america.pool.ntp.org", -18000, 60000); // UDP client to talk to NTP servers for time
+
 BluetoothModule bt;     // Create bt instance
 //SDAccess sd;            // create SD card instance
-DS3232RTC rtc;          // Create RTC instance
-PH ph(PH_SENSOR_PIN, C02_VALVE_PIN, &rtc);     // Create Ph Controller - Inputs = (PH Input Pin, C02 Relay Trigger Pin, Pointer to RTC class)
+
+PH ph(PH_SENSOR_PIN, C02_VALVE_PIN);     // Create Ph Controller - Inputs = (PH Input Pin, C02 Relay Trigger Pin, Pointer to RTC class)
 AutoTopOff ato(OPTICAL_SWITCH_PIN, ALARM_SWITCH_PIN, WATER_VALVE_PIN);                // Create ATO instance
 
 // PWM and LEDS
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();  // Setup PWM Driver
-Light light(&pwm, &rtc);  // Setup my light, needs the driver and the time
+//Light light(&pwm);  // Setup my light, needs the driver and the time
 
 // Temp Sensors
-OneWire oneWire(ONE_WIRE_PIN);                            // Setup onewire connection for comms with temp sensor(s)
+OneWire oneWire(ONE_WIRE_PIN);   // Setup onewire connection for comms with temp sensor(s)
 DallasTemperature tempSensors(&oneWire);    // tell temp sensor library to use oneWire to talk to sensors
 Temp temp(&tempSensors);                    // Tell the temp control library which sensors to use
 
 //EepromAccess eeprom(ph.getDataAddress(), light.getDataAddress(), temp.getDataAddress());   // Create eepromAccess class, send it a reference of everything that needs saved
-
-// constants for seconds in standard units of time
-const unsigned long SecondsPerHour = 60UL * 60;
-const unsigned long SecondsPerMinute = 60UL;
 
 void TaskATOAlarm( void *pvParameters ) {
   static UBaseType_t prevMarkATOAlarm = NULL;
@@ -125,21 +138,37 @@ void TaskSD( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
-void TaskLights( void *pvParameters ) {
-  static UBaseType_t prevMarkLight = NULL;
-  light.loop(now());  // Run light controls, it needs to know the current time
-  vTaskDelay(100 / portTICK_PERIOD_MS);
-  for (;;) {
-    light.loop(now());  // Run light controls, it needs to know the current time
-    //Serial.println("lights");
+void TaskRTC( void *pvParameters ) {
+  static UBaseType_t prevMarkRTC = NULL;
+  vTaskDelay(100);
+  for(;;) {
+    // Do RTC thungs here
     UBaseType_t highMark = uxTaskGetStackHighWaterMark( NULL );
-     if(highMark != prevMarkLight) {
-      ESP_LOGD("Light", "Light Task Highwater: %u", highMark);
-       prevMarkLight = highMark;
-     }
+    if(highMark != prevMarkRTC) {
+      ESP_LOGD("RTC", "RTC Task Highwater: %u", highMark);
+      prevMarkRTC = highMark;
+    }
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
   vTaskDelete( NULL );
 }
+
+// void TaskLights( void *pvParameters ) {
+//   static UBaseType_t prevMarkLight = NULL;
+//   light.loop(now());  // Run light controls, it needs to know the current time
+//     light.init();       // set initial state and begin running routines
+//   vTaskDelay(100 / portTICK_PERIOD_MS);
+//   for (;;) {
+//     light.loop(now());  // Run light controls, it needs to know the current time
+//     //Serial.println("lights");
+//     UBaseType_t highMark = uxTaskGetStackHighWaterMark( NULL );
+//      if(highMark != prevMarkLight) {
+//       ESP_LOGD("Light", "Light Task Highwater: %u", highMark);
+//        prevMarkLight = highMark;
+//      }
+//   }
+//   vTaskDelete( NULL );
+// }
 
 void TaskBluetooth( void *pvParameters ) {
   for (;;) {
@@ -172,12 +201,26 @@ void setup() {
   ESP_LOGI("SYSTEM","Welcome to Aquatroller!");
   delay(800);
 
-  setupRTC();         // setup routine, gets time from RTC and sets it in the sketch
+  preferences.begin("MainApp", true); // true = read only, Setup NVS for main app preferences 
+
+  int appVersion = preferences.getInt( "Version", 0);
+
+  if ( appVersion == 0) {
+    ESP_LOGE("Prefs", "Error: No previous data found, please initialize the memory space");
+  } else {
+    ESP_LOGD("Prefs", "Found save data for version #$i", appVersion );
+  }
+
+  preferences.end();
+  //prefs.init();
+  setupRTC();    // setup routine, gets time from RTC and sets local time
+  connectToWifi();
+  setupNTP();    // setup NTP Server to get an ntp update and sync the RTC
   ESP_LOGI("SYSTEM", "%u:%u", hour(now()), minute(now()));  
 
   // eeprom.setup();      // Check for existing save, load if found, else generate new save and populate with default values
   // sd.init();          // init sd card, TODO: if card not present dont try to log
-  light.init();       // set initial state and begin running routines
+  //connectToWifi();
   // bt.setup();          // init bluetooth comms
   // Serial.println(F("Bluetooth Enabled"));
   // temp.init();
@@ -190,52 +233,53 @@ void setup() {
   
   // xTaskCreatePinnedToCore( TaskSD, "TaskSD", 1024, NULL, 2, NULL,  1);
 
-  #ifdef LIGHT_CONTROL  
-    if ( xTaskCreatePinnedToCore( TaskLights, "TaskLights", 2000, NULL, 2, NULL,  1) == pdPASS) {
-      ESP_LOGI("light", "light task started");
-    } else {
-      ESP_LOGE("light", "light task failed to start");
-    }
-  #endif
+  // #ifdef LIGHT_CONTROL  
+  //   if ( xTaskCreatePinnedToCore( TaskLights, "TaskLights", 2000, NULL, 2, NULL,  1) == pdPASS) {
+  //     ESP_LOGI("light", "light task started");
+  //   } else {
+  //     ESP_LOGE("light", "light task failed to start");
+  //   }
+  // #endif
   
-  #ifdef PH_CONTROL
-    if ( xTaskCreatePinnedToCore(TaskPH, "TaskPH", 2700, NULL, 2, NULL, 1) == pdPASS) {
-      ESP_LOGI("PH", "PH task started");
-    } else {
-      ESP_LOGE("PH", "PH task failed to start");
-    }
-  #endif
+  // #ifdef PH_CONTROL
+  //   if ( xTaskCreatePinnedToCore(TaskPH, "TaskPH", 2700, NULL, 2, NULL, 1) == pdPASS) {
+  //     ESP_LOGI("PH", "PH task started");
+  //   } else {
+  //     ESP_LOGE("PH", "PH task failed to start");
+  //   }
+  // #endif
 
-  #ifdef C02_CONTROL
-    if ( xTaskCreatePinnedToCore(TaskC02, "TaskC02", 1700, NULL, 2, NULL, 1) == pdPASS) {
-      ESP_LOGI("C02", "C02 task started");
-    } else {
-      ESP_LOGE("C02", "C02 task failed to start");
-    }
-  #endif
+  // #ifdef C02_CONTROL
+  //   if ( xTaskCreatePinnedToCore(TaskC02, "TaskC02", 1700, NULL, 2, NULL, 1) == pdPASS) {
+  //     ESP_LOGI("C02", "C02 task started");
+  //   } else {
+  //     ESP_LOGE("C02", "C02 task failed to start");
+  //   }
+  // #endif
 
-  // xTaskCreatePinnedToCore( TaskBluetooth, "TaskBluetooth", 1024, NULL, 2, NULL,  1);
-  #ifdef TEMP_CONTROL
-    if ( xTaskCreatePinnedToCore(TaskTemp, "TaskTemp", 2000, NULL, 2, NULL, 1) == pdPASS) {
-      ESP_LOGI("Temperature", "Temperature task started");
-    } else {
-      ESP_LOGE("Temperature", "Temperature task failed to start");
-    }
+  // // xTaskCreatePinnedToCore( TaskBluetooth, "TaskBluetooth", 1024, NULL, 2, NULL,  1);
+  // #ifdef TEMP_CONTROL
+  //   if ( xTaskCreatePinnedToCore(TaskTemp, "TaskTemp", 2000, NULL, 2, NULL, 1) == pdPASS) {
+  //     ESP_LOGI("Temperature", "Temperature task started");
+  //   } else {
+  //     ESP_LOGE("Temperature", "Temperature task failed to start");
+  //   }
+  // #endif
 
+  #ifdef ATO_CONTROL
     if ( xTaskCreatePinnedToCore(TaskATOAlarm, "TaskATOAlarm", 1700, NULL, 2, NULL, 1) == pdPASS) {
       ESP_LOGI("ATOALARM", "ATO Alarm task started");
     } else {
       ESP_LOGE("ATOAlarm", "ATO Alarm task failed to start");
     }
-  #endif
 
-  #ifdef ATO_CONTROL
     if ( xTaskCreatePinnedToCore(TaskATOValve, "TaskATOValve", 1700, NULL, 2, NULL, 1) == pdPASS) {
       ESP_LOGI("ATOValve", "ATO Valve task started");
     } else {
       ESP_LOGE("ATOValve", "ATO Valve task failed to start");
     }
   #endif
+  OtaSetup(); // Setup ota over wifi
   ESP_LOGI("SYSTEM", "Aquatroller Ready");
 
 }
@@ -244,7 +288,8 @@ void loop() {
 
   // unsigned long currentTime;
   // currentTime = millis();
-  //now();
+  now();  // Process for keeping track of time
+  ArduinoOTA.handle();  // Check for incoming OTA update
   // This is a non blocking bluetooth implementation. Thanks to Robin2's mega post for most of this code
   //bt.loop();          // Check for and save valid packets
  // if (bt.newParse) {              // If we have a new parsed packet
@@ -261,7 +306,7 @@ void loop() {
 
   //    Serial.print(F("Free Ram - Loop:"));
   //    Serial.println(freeRam());
-
+  // timeClient.update();
   delay(1000);
 }
 
@@ -301,21 +346,21 @@ void decodePacket(BTParse data) { // Decides which actions should be taken on in
           break;
         case 2: // Get Light Mode
           Serial.print(F("Light Mode: "));
-          Serial.println(light.getMode());
+          //Serial.println(light.getMode());
           break;
         case 3: // Set Light Mode
-          light.setMode(data.value);
+          //light.setMode(data.value);
           break;
         case 4: // Get LED On Time
           Serial.print(F("Light on time: "));
-          Serial.println(light.getOnTime());
+          //Serial.println(light.getOnTime());
           break;
         case 5: // Set LED on time
           //light.setOnTime(data.value);
           break;
         case 6: // Get LED Off Time
           Serial.print(F("Light off time: "));
-          Serial.println(light.getOffTime());
+          //Serial.println(light.getOffTime());
           break;
         case 7: // Set LED Off time
           //light.setOffTime(data.value);
@@ -444,12 +489,12 @@ void decodePacket(BTParse data) { // Decides which actions should be taken on in
     case 6:
       switch (data.option) {
         case 0: // Get Current Time in SSM TODO: Testing !!!!!!!!!!!!!!
-          Serial.print(F("Seconds Since Midnight: "));
-          Serial.println(getTimeInSeconds());
-          Serial.print(F("On Time: "));
-          Serial.println(light.getOnTime());
-          Serial.print(F("Off Time: "));
-          Serial.println(light.getOffTime());
+          // Serial.print(F("Seconds Since Midnight: "));
+          // Serial.println(mytime.getTimeInSeconds());
+          // Serial.print(F("On Time: "));
+          // Serial.println(light.getOnTime());
+          // Serial.print(F("Off Time: "));
+          // Serial.println(light.getOffTime());
 
           break;
 
@@ -468,10 +513,10 @@ void decodePacket(BTParse data) { // Decides which actions should be taken on in
         Serial.println(); Serial.println(); Serial.println(); Serial.println(); Serial.println(); Serial.println();
         Serial.println(); Serial.println(); Serial.println(); Serial.println(); Serial.println(); Serial.println();
         Serial.println(F("!!!!!!!!!!!!!!!!"));
-        Serial.println(F("Reseting Device"));
+        Serial.println(F("Restarting Device"));
         Serial.println(); Serial.println();
         delay(2000);
-        resetFunc();
+        ESP.restart();
 
       }
       break;
@@ -484,9 +529,38 @@ void decodePacket(BTParse data) { // Decides which actions should be taken on in
 }
 
 
+int freeRam () {
+  extern int __heap_start, *__brkval;
+  int v;
+  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+}
+
+void connectToWifi() { 
+ WiFi.mode(WIFI_STA);
+ WiFi.begin(PRIVATE_SSID, PRIVATE_PASSWORD);
+
+  while ( WiFi.status() != WL_CONNECTED ) {
+    delay ( 500 );
+    Serial.print ( "." );
+  }
+  Serial.println("");
+  Serial.println("Connected");
+}
+
+void setupNTP() {
+  timeClient.begin();
+  syncNtpToRtc();
+}
+
+void syncNtpToRtc() {
+  rtc.set( timeClient.getEpochTime() );
+  now();
+  ESP_LOGI("NTP", "NTP has synced the RTC time");
+}
 
 void setupRTC() {
-  rtc.begin();                    // try to startup RTC
+  
+    rtc.begin();
   //rtc.set(1630167564);
   setSyncProvider ( rtc.get );         //Sets our time keeper as the RTC
   // setTime(RTC.get);              // Sets system time to RTC Time
@@ -505,6 +579,35 @@ void setupRTC() {
   }
 }
 
+void OtaSetup() {
+  ArduinoOTA
+    .onStart([]() {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH)
+        type = "sketch";
+      else // U_SPIFFS
+        type = "filesystem";
+
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      Serial.println("Start updating " + type);
+    })
+    .onEnd([]() {
+      Serial.println("\nEnd");
+    })
+    .onProgress([](unsigned int progress, unsigned int total) {
+      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    })
+    .onError([](ota_error_t error) {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+  ArduinoOTA.setHostname("Aquatroller");
+  ArduinoOTA.begin();
+}
 
 // Returns time in seconds since previous midnight
 // Takes int for hour and minute and seconds, returns UL seconds. Zero is valid input
@@ -518,10 +621,4 @@ unsigned long getTimeInSeconds (time_t getTime) {         // Calculate seconds s
 
 unsigned long getTimeInSeconds () {         // Calculate seconds since midnight as of now
   return ((hour() * SecondsPerHour) + (minute() * SecondsPerMinute) + second());
-}
-
-int freeRam () {
-  extern int __heap_start, *__brkval;
-  int v;
-  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }

@@ -5,23 +5,16 @@ Temp::Temp(DallasTemperature* tempSensors) {
 }
 
 void Temp::init() {
-  //Serial.println(F("Initializing Temperature Controls... "));
+  ESP_LOGV("Temp", "Initializing Temperature Controls... ");
   _temp->begin();                           // Initialize comms for sensors
   _temp->setWaitForConversion("FALSE");     // We dont want to wait, it blocks us, so we will time it ourselves
   pinMode(HEATER_PIN, OUTPUT);               // Setup heater pin as output
   digitalWrite(HEATER_PIN, LOW);            // Turn it off
-
-  /////// Testing ////////////////
-  // Serial.print(F("Sensors Found: "));
-  // Serial.println(_temp->getDeviceCount(), DEC);
-  ////////////////////////////////
-
-  // Serial.println(F("Done"));
-
+  ESP_LOGV("Temp", "Temperature Controls Ready");
 }
 
 void Temp::loop() {
-  updateTemps();    // Non blocking temp request
+  updateTemps();
   getCurrentTemp();
                                                   
   vTaskDelay(pdMS_TO_TICKS(getTempDelay()));  // Pause task for temp delay
@@ -40,14 +33,12 @@ void Temp::heaterLoop() {
 float Temp::getCurrentTemp() { 
   float averageTemp = 0;  // accumulates temps for average
   int activeSensorCount = 0;    // Number of sensors that are functioning with no errors
-  static bool prevError[NUM_OF_SENSORS];
-  // Cycle through all sensors, add the value of only sensors without errors reported
-  //  
-  for(int index = 0; index < NUM_OF_SENSORS; index++ ) {
-    if (_tempError[index]) {
-      if (prevError[index] != _tempError[index]) {
+  static bool prevError[NUM_OF_SENSORS];  // array to hold previous error flags so we only print one error
+  for(int index = 0; index < NUM_OF_SENSORS; index++ ) {    // Cycle through all sensors
+    if (_tempError[index]) {  // if this sensor has an error flag
+      if (prevError[index] != _tempError[index]) {  // if this is the first time for this flag
         ESP_LOGD("Temp", "Sensor %i Error. Ignoring Value", index);
-        prevError[index] = _tempError[index];
+        prevError[index] = _tempError[index]; // update previous error so it doesnt print again till reset
       }
     } else {
       averageTemp += _temps[index];
@@ -86,9 +77,7 @@ void Temp::updateTemps() {
     _temps[sensor] = _temp->getTempFByIndex(sensor);    // Read the sensosr on the Wire bus
     if (_temps[sensor] <= TEMP_ERROR_DISCONNECTED) {   // Check for errors
       _tempError[sensor] = true;
-      if(prevTempError[sensor] == _tempError[sensor]) {
-        continue;
-      } else {
+      if(prevTempError[sensor] != _tempError[sensor]) {
         ESP_LOGE("Temp", "Temp Sensor %i: ERROR #196: Disconnected", sensor);
         prevTempError[sensor] = _tempError[sensor];
       }
@@ -103,7 +92,7 @@ void Temp::turnHeaterOn() {
   if (!isHeaterOn()) {                                  // Only Turn it on if its off
     ESP_LOGI("Temp", "Turning heater ON");
     digitalWrite(HEATER_PIN, HIGH);                     // Turn on heater
-    _isHeaterOn() = true;
+    _isHeaterOn = true;
   }
 }
 
@@ -145,13 +134,12 @@ void Temp::setTargetTemp(float newTemp) {
   _tempData.targetTemp = newTemp;
 }
 
-void Temp::isHeaterOn() {
-  ESP_LOGV("Temp", "Checking heaters state...");
+bool Temp::isHeaterOn() {
+  ESP_LOGV("Temp", "Checking heater state...");
   if ( _isHeaterOn ) {
     ESP_LOGV("Temp", "Heater is: ON");
   } else {
     ESP_LOGV("Temp", "Heater is: OFF");
   }
-    return _isHeaterOn;
-  
+  return _isHeaterOn;
 }
