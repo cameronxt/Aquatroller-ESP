@@ -1,10 +1,10 @@
 // TODO: SD Card: Store Settings & Save Logs
 
 // Optional Modules. comment to disable
-// #define LIGHT_CONTROL
-// #define TEMP_CONTROL
-// #define PH_CONTROL
-// #define C02_CONTROL
+#define LIGHT_CONTROL
+#define TEMP_CONTROL
+#define PH_CONTROL
+#define C02_CONTROL
 #define ATO_CONTROL
 
 #if CONFIG_FREERTOS_UNICORE
@@ -14,18 +14,19 @@
 #endif
 
 // Standard includes
-#include <WiFi.h>
-#include <WiFiUdp.h> 
-#include <ESPmDNS.h>  // for OTA
-#include <ArduinoOTA.h>
+#include <WiFi.h> // WiFi Driver
+#include <WiFiUdp.h> // UDP socket
+#include <ESPmDNS.h>  // mDNS for domain name resolution
+#include <ArduinoOTA.h> // OTA Library
 #include <Wire.h> // Talks to the ds18b20
 #include <esp_log.h>
 #include <Preferences.h>
 
 // Additionally downloaded libraries
 #include <NTPClient.h>  // to talk to NTP servers
-#include "DS3232RTC.h"                 // https://github.com/JChristensen/DS3232RTC
-#include <RTClib.h>
+#include <ESP32Time.h>
+#include "DS3232RTC.h"  // https://github.com/JChristensen/DS3232RTC
+#include <RTClib.h> //
 
 // My Libraries
 //#include "eepromaccess.h"
@@ -55,7 +56,7 @@ DS3232RTC rtc; // create a RTC object
 
 WiFiUDP ntpUDP; // Create a UDP socket
 // Setup NTP client periodically update time frome NTP server
-NTPClient timeClient (ntpUDP, "north-america.pool.ntp.org", -18000, 60000); // UDP client to talk to NTP servers for time
+NTPClient timeClient (ntpUDP, "0.pool.ntp.org", -18000, 3600); // UDP client to talk to NTP servers for time
 
 BluetoothModule bt;     // Create bt instance
 //SDAccess sd;            // create SD card instance
@@ -201,22 +202,13 @@ void setup() {
   ESP_LOGI("SYSTEM","Welcome to Aquatroller!");
   delay(800);
 
-  preferences.begin("MainApp", true); // true = read only, Setup NVS for main app preferences 
-
-  int appVersion = preferences.getInt( "Version", 0);
-
-  if ( appVersion == 0) {
-    ESP_LOGE("Prefs", "Error: No previous data found, please initialize the memory space");
-  } else {
-    ESP_LOGD("Prefs", "Found save data for version #$i", appVersion );
-  }
-
-  preferences.end();
-  //prefs.init();
+  
   setupRTC();    // setup routine, gets time from RTC and sets local time
+  ESP_LOGI("SYSTEM", "%02u:%02u", hour(), minute());  
   connectToWifi();
   setupNTP();    // setup NTP Server to get an ntp update and sync the RTC
-  ESP_LOGI("SYSTEM", "%u:%u", hour(now()), minute(now()));  
+  //time_t timeNow = now();
+  ESP_LOGI("SYSTEM", "%02u:%02u", hour(), minute());  
 
   // eeprom.setup();      // Check for existing save, load if found, else generate new save and populate with default values
   // sd.init();          // init sd card, TODO: if card not present dont try to log
@@ -230,6 +222,18 @@ void setup() {
   // Serial.println( freeRam() );
   ESP_LOGD("SYSTEM","Loading Modules..");
 
+  preferences.begin("MainApp", true); // true = read only, Setup NVS for main app preferences 
+
+  int appVersion = preferences.getInt( "Version", 0);
+
+  if ( appVersion == 0) {
+    ESP_LOGE("Prefs", "Error: No previous data found, please initialize the memory space");
+  } else {
+    ESP_LOGD("Prefs", "Found save data for version #$i", appVersion );
+  }
+
+  preferences.end();
+  //prefs.init();
   
   // xTaskCreatePinnedToCore( TaskSD, "TaskSD", 1024, NULL, 2, NULL,  1);
 
@@ -552,19 +556,27 @@ void setupNTP() {
   syncNtpToRtc();
 }
 
+time_t getNtpTime() {
+  timeClient.update();
+  time_t ntpTime = timeClient.getEpochTime();
+  ESP_LOGI("NTP", "NTP has synced the time to %i", ntpTime );
+  return ntpTime;
+}
+
 void syncNtpToRtc() {
-  rtc.set( timeClient.getEpochTime() );
-  now();
-  ESP_LOGI("NTP", "NTP has synced the RTC time");
+  setSyncProvider( getNtpTime );
+  setSyncInterval( 24 * SecondsPerHour ); // Only update every 24 hours
+  //now();
+  ESP_LOGI("NTP", "NTP has synced the RTC time to %i", now() );
 }
 
 void setupRTC() {
   
     rtc.begin();
   //rtc.set(1630167564);
-  setSyncProvider ( rtc.get );         //Sets our time keeper as the RTC
-  // setTime(RTC.get);              // Sets system time to RTC Time
-  setSyncInterval(60);               // number of seconds to go before requesting re-sync
+  setSyncProvider ( rtc.get );  //Sets our time keeper as the RTC
+  // setTime(RTC.get);  // Sets system time to RTC Time
+  setSyncInterval(60);  // number of seconds to go before requesting re-sync
   if (timeStatus() != timeSet){
     ESP_LOGW("RTC","Unable to sync with the RTC");
     ESP_LOGW("RTC","Reverting to default time");
