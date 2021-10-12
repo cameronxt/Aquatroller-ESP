@@ -78,10 +78,9 @@ class PH {
 
 public:
   PHData _phData;
-  DS3232RTC *_rtc;  // Create RTC pointer
-
+ 
   //////////// PH Methods ////////////
-  PH(byte phInputPin, byte c02OutputPin, DS3232RTC *rtc);
+  PH(byte phInputPin, byte c02OutputPin);
 
   void init();
   void phLoop();
