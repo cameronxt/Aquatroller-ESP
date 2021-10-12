@@ -63,7 +63,7 @@ class AutoTopOff{
   private:
     ATOData _data;    // User editable values
 
-    /////// constants declared in constructor ////////
+    /////// constants assigned in constructor ////////
     const byte _opticalSwitchPin;
     const byte _alarmSwitchPin;
     const byte _waterValvePin;

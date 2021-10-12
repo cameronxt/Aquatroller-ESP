@@ -20,15 +20,17 @@ void AutoTopOff::init() {  // Setup control pins
 void AutoTopOff::alarmLoop() {
   ESP_LOGV("ATO", "Checking for alarms");
   unsigned long delay;    //required delay in millis
-  if ( isFilling() ) {    // Set appropriate delay based on whether filling
-    delay = _data.AlarmCheckDelayWhileFilling;  
-  } else {
-    delay = _data.AlarmCheckDelay;
-  }
+
   if (checkForAlarm()) {   // if alarm switch has been triggered
     disableATOValve();  // turn of the valve so it doesnt overflow
   } else {  // otherwise we can reset the alarm
     resetAlarm();
+  }
+  
+  if ( isFilling() ) {    // Set appropriate delay based on whether filling
+    delay = _data.AlarmCheckDelayWhileFilling;  
+  } else {
+    delay = _data.AlarmCheckDelay;
   }
   ESP_LOGD("ATO", "Alarm check delay is %i", delay);
   vTaskDelay(delay / portTICK_PERIOD_MS);

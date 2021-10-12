@@ -1,10 +1,10 @@
 #include "ph.h"
 
 // PH Constructor
-PH::PH(byte phInputPin, byte c02OutputPin, DS3232RTC *rtc)
+PH::PH(byte phInputPin, byte c02OutputPin)
   : _phPin(phInputPin),     // PH Sensor Analog pin
-    _c02Pin(c02OutputPin),  // C02 relay pin
-    _rtc(rtc) {
+    _c02Pin(c02OutputPin)  // C02 relay pin
+     {
   // _phData.targetPh = 7.0;
 }
 

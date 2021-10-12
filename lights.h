@@ -1,3 +1,5 @@
+// ESP-IFY!!!!!!!!!!!!!
+
 // TODO: Rework lights so that we can have custom fade maps
 // TODO: Add a moonlights function, basically a second timer that runs from a different fade map
 // TODO: Add a timed override mode so we can bypass current settings for a set period
