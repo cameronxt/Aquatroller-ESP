@@ -12,7 +12,6 @@
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>   // https://github.com/pkourany/Adafruit_PWMServoDriver_IDE 
 #include <DS3232RTC.h>                 // https://github.com/JChristensen/DS3232RTC
-#include "RTClib.h"
 #include <TimeLib.h>
 #include "esp_log.h"
 

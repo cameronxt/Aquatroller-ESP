@@ -15,18 +15,11 @@
 
 // Standard includes
 #include <WiFi.h> // WiFi Driver
-#include <WiFiUdp.h> // UDP socket
-#include <ESPmDNS.h>  // mDNS for domain name resolution
 #include <ArduinoOTA.h> // OTA Library
 #include <Wire.h> // Talks to the ds18b20
 #include <esp_log.h>
 #include <Preferences.h>
-
-// Additionally downloaded libraries
-#include <NTPClient.h>  // to talk to NTP servers
-#include <ESP32Time.h>
-#include "DS3232RTC.h"  // https://github.com/JChristensen/DS3232RTC
-#include <RTClib.h> //
+#include "include/time.h"
 
 // My Libraries
 //#include "eepromaccess.h"
@@ -46,17 +39,22 @@
 #define WATER_VALVE_PIN 0
 #define ONE_WIRE_PIN 4
 
+// TODO: Move into myTime and make changable/savable
+// NFS server
+const char  ntpServer[32] = "pool.ntp.org";
+const long  gmtOffset_sec = -21400;
+const int   daylightOffset_sec = 3600;
+
 // constants for number of seconds in standard units of time
 const unsigned long SecondsPerHour = 60UL * 60;
 const unsigned long SecondsPerMinute = 60UL;
 
+
+
+
+////////////// instance declaration //////////////////////
 Preferences preferences;
 // PrefAccess prefs; // Object for retrieving and saving preferences
-DS3232RTC rtc; // create a RTC object
-
-WiFiUDP ntpUDP; // Create a UDP socket
-// Setup NTP client periodically update time frome NTP server
-NTPClient timeClient (ntpUDP, "0.pool.ntp.org", -18000, 3600); // UDP client to talk to NTP servers for time
 
 BluetoothModule bt;     // Create bt instance
 //SDAccess sd;            // create SD card instance
@@ -75,6 +73,14 @@ Temp temp(&tempSensors);                    // Tell the temp control library whi
 
 //EepromAccess eeprom(ph.getDataAddress(), light.getDataAddress(), temp.getDataAddress());   // Create eepromAccess class, send it a reference of everything that needs saved
 
+////////////// instance declaration //////////////////////
+
+
+
+
+////////////// RTOS task functions /////////////
+
+// Monitor ATO overfill alarm switch
 void TaskATOAlarm( void *pvParameters ) {
   static UBaseType_t prevMarkATOAlarm = NULL;
   vTaskDelay(ato.getAlarmCheckDelay() / portTICK_PERIOD_MS);
@@ -89,6 +95,7 @@ void TaskATOAlarm( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
+// Control ATO valve based on result from optical level sensor
 void TaskATOValve( void *pvParameters ) {
   static UBaseType_t prevMarkATOValve = NULL;
   vTaskDelay(ato.getValveCycleDelay() / portTICK_PERIOD_MS);
@@ -103,6 +110,7 @@ void TaskATOValve( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
+// Monitor ph from analog ph sensor
 void TaskPH( void *pvParameters ) {
   static UBaseType_t prevMarkPh = NULL;
   vTaskDelay(ph.getPhDelay() / portTICK_PERIOD_MS);
@@ -118,6 +126,7 @@ void TaskPH( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
+// Actuate c02 valve based on current ph vs desired drop
 void TaskC02( void *pvParameters ) {
   static UBaseType_t prevMarkC02 = NULL;
   vTaskDelay(ph.getC02Delay() / portTICK_PERIOD_MS);
@@ -132,6 +141,25 @@ void TaskC02( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
+// TODO: backup settings to SD every so often
+// TODO: generic log to file function (psuedo)
+//          - create buffer to store log messages
+//          - once buffer is full or after certain time period
+//          - logToSd(String logCaller, String[] msgToLog);
+//          - logCaller will have ".log" added to create file name
+//          - msgToLog is a string array of the message from buffer to log  
+//          - check if file exist
+//          - if not, make one
+//          - open the file
+//          - append message(s) to log file
+//          - close file
+// TODO: Check if file exists
+// TODO; Check if directory exist
+// TODO: Make new directory -- logCaller will be directory name of log files
+// TODO: Make new file -- logCaller + todaysDate + .log
+// TODO: Rename file
+// TODO: Delete file
+// TODO: New file with new date name everyday. delete after n days
 void TaskSD( void *pvParameters ) {
   for (;;) {
 // Do SD card Things    
@@ -171,6 +199,12 @@ void TaskRTC( void *pvParameters ) {
 //   vTaskDelete( NULL );
 // }
 
+// RTOS function to run bluetooth
+//    -- 
+//    -- Connect/Disconnect
+//    -- get/set settings (parsing data)
+//    -- Transfer log file(s)
+//    -- Time sync with phone (android app)
 void TaskBluetooth( void *pvParameters ) {
   for (;;) {
     // Do Bluetooth Things
@@ -197,17 +231,16 @@ void TaskWifi( void *pvParameters ) {
   }
 }
 
+////////////////// End RTOS Functions //////////////////////////
+
 void setup() {
   Serial.begin(115200);
   ESP_LOGI("SYSTEM","Welcome to Aquatroller!");
-  delay(800);
+  delay(800);  // one of my esp32 devkit clones crashes without this
 
-  
-  setupRTC();    // setup routine, gets time from RTC and sets local time
-  ESP_LOGI("SYSTEM", "%02u:%02u", hour(), minute());  
   connectToWifi();
-  setupNTP();    // setup NTP Server to get an ntp update and sync the RTC
-  //time_t timeNow = now();
+  
+  setupTime();    // setup routine, gets time from RTC and sets local time
   ESP_LOGI("SYSTEM", "%02u:%02u", hour(), minute());  
 
   // eeprom.setup();      // Check for existing save, load if found, else generate new save and populate with default values
@@ -551,44 +584,37 @@ void connectToWifi() {
   Serial.println("Connected");
 }
 
-void setupNTP() {
-  timeClient.begin();
-  syncNtpToRtc();
+void reconnectToWifi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    ESP_LOGW("WiFi", "Wifi disconnected, attempting to re-connect");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    if (WiFi.status() == WL_CONNECTED) { 
+      ESP_LOGW("WiFi", "Wifi reconnected succesfully");
+    }
+  } else {
+    ESP_LOGV("System", "WiFi already connected");
+  }
 }
 
 time_t getNtpTime() {
-  timeClient.update();
-  time_t ntpTime = timeClient.getEpochTime();
+  //timeClient.update();
+  time_t ntpTime = millis(); // TESTING: need to make actual call
   ESP_LOGI("NTP", "NTP has synced the time to %i", ntpTime );
   return ntpTime;
 }
 
-void syncNtpToRtc() {
-  setSyncProvider( getNtpTime );
-  setSyncInterval( 24 * SecondsPerHour ); // Only update every 24 hours
-  //now();
-  ESP_LOGI("NTP", "NTP has synced the RTC time to %i", now() );
-}
 
-void setupRTC() {
-  
-    rtc.begin();
-  //rtc.set(1630167564);
-  setSyncProvider ( rtc.get );  //Sets our time keeper as the RTC
-  // setTime(RTC.get);  // Sets system time to RTC Time
-  setSyncInterval(60);  // number of seconds to go before requesting re-sync
-  if (timeStatus() != timeSet){
-    ESP_LOGW("RTC","Unable to sync with the RTC");
-    ESP_LOGW("RTC","Reverting to default time");
-    // following line sets the RTC to the date & time this sketch was compiled
-    //adjustTime((long int)(F(__DATE__), F(__TIME__)));
-    rtc.set(1630167564);
-    // This line sets the RTC with an explicit date & time, for example to set
-    // January 21, 2014 at 3am you would call:
-    //rtc.adjust(DateTime(2019, 4, 30, 23, 52, 0));
-  } else {
-    ESP_LOGI("RTC","RTC has set the system time");
+void setupTime() {
+
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
   }
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+    
 }
 
 void OtaSetup() {
