@@ -141,7 +141,7 @@ void TaskC02( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
-// TODO: backup settings to SD every so often
+// TODO: backup settings to SD every so often ?
 // TODO: generic log to file function (psuedo)
 //          - create buffer to store log messages
 //          - once buffer is full or after certain time period
@@ -167,11 +167,12 @@ void TaskSD( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
+// RTOS task to handle updating rtc with ntp
 void TaskRTC( void *pvParameters ) {
   static UBaseType_t prevMarkRTC = NULL;
   vTaskDelay(100);
   for(;;) {
-    // Do RTC thungs here
+    // Do RTC things here
     UBaseType_t highMark = uxTaskGetStackHighWaterMark( NULL );
     if(highMark != prevMarkRTC) {
       ESP_LOGD("RTC", "RTC Task Highwater: %u", highMark);
@@ -182,24 +183,25 @@ void TaskRTC( void *pvParameters ) {
   vTaskDelete( NULL );
 }
 
-// void TaskLights( void *pvParameters ) {
-//   static UBaseType_t prevMarkLight = NULL;
-//   light.loop(now());  // Run light controls, it needs to know the current time
-//     light.init();       // set initial state and begin running routines
-//   vTaskDelay(100 / portTICK_PERIOD_MS);
-//   for (;;) {
-//     light.loop(now());  // Run light controls, it needs to know the current time
-//     //Serial.println("lights");
-//     UBaseType_t highMark = uxTaskGetStackHighWaterMark( NULL );
-//      if(highMark != prevMarkLight) {
-//       ESP_LOGD("Light", "Light Task Highwater: %u", highMark);
-//        prevMarkLight = highMark;
-//      }
-//   }
-//   vTaskDelete( NULL );
-// }
+// RTOS Task to handle lights
+void TaskLights( void *pvParameters ) {
+  static UBaseType_t prevMarkLight = NULL;
+  light.loop(now());  // Run light controls, it needs to know the current time
+    light.init();       // set initial state and begin running routines
+  vTaskDelay(100 / portTICK_PERIOD_MS);
+  for (;;) {
+    light.loop(now());  // Run light controls, it needs to know the current time
+    //Serial.println("lights");
+    UBaseType_t highMark = uxTaskGetStackHighWaterMark( NULL );
+     if(highMark != prevMarkLight) {
+      ESP_LOGD("Light", "Light Task Highwater: %u", highMark);
+       prevMarkLight = highMark;
+     }
+  }
+  vTaskDelete( NULL );
+}
 
-// RTOS function to run bluetooth
+// RTOS function to run bluetoothfunctions
 //    -- 
 //    -- Connect/Disconnect
 //    -- get/set settings (parsing data)
@@ -209,8 +211,11 @@ void TaskBluetooth( void *pvParameters ) {
   for (;;) {
     // Do Bluetooth Things
   }
+  vTaskDelete( NULL );
 }
 
+// RTOS task to monitor and control temp
+//   TODO: Split monitoring and control into independant tasks
 void TaskTemp( void *pvParameters ) {
   static UBaseType_t prevMarkTemp = NULL;
   vTaskDelay(temp.getTempDelay() / portTICK_PERIOD_MS);
@@ -223,12 +228,18 @@ void TaskTemp( void *pvParameters ) {
        prevMarkTemp = highMark;
      }
   }
+  vTaskDelete( NULL );
 }
 
+
+// RTOS task to handle wifi comms and also maintain wifi connection
 void TaskWifi( void *pvParameters ) {
   for (;;) {
+    vTaskDelay( 10000 / portTICK_PERIOD_MS ); // 10 seconds
     // do wifi things
+    reconnectToWifi();
   }
+  vTaskDelete( NULL );
 }
 
 ////////////////// End RTOS Functions //////////////////////////
@@ -316,6 +327,7 @@ void setup() {
       ESP_LOGE("ATOValve", "ATO Valve task failed to start");
     }
   #endif
+
   OtaSetup(); // Setup ota over wifi
   ESP_LOGI("SYSTEM", "Aquatroller Ready");
 
@@ -572,12 +584,13 @@ int freeRam () {
   return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }
 
+// Creates new connection to wifi network
 void connectToWifi() { 
  WiFi.mode(WIFI_STA);
  WiFi.begin(PRIVATE_SSID, PRIVATE_PASSWORD);
 
   while ( WiFi.status() != WL_CONNECTED ) {
-    delay ( 500 );
+    vTaskDelay( 500 / portTICK_PERIOD_MS );
     Serial.print ( "." );
   }
   Serial.println("");
@@ -589,10 +602,12 @@ void reconnectToWifi() {
     ESP_LOGW("WiFi", "Wifi disconnected, attempting to re-connect");
     WiFi.disconnect();
     WiFi.reconnect();
-    if (WiFi.status() == WL_CONNECTED) { 
-      ESP_LOGW("WiFi", "Wifi reconnected succesfully");
+    while (WiFi.status() != WL_CONNECTED) { 
+      vTaskDelay( 500 / portTICK_PERIOD_MS );
+      Serial.println( "." );
     }
-  } else {
+    ESP_LOGW("WiFi", "Wifi reconnected succesfully");
+    } else {
     ESP_LOGV("System", "WiFi already connected");
   }
 }
